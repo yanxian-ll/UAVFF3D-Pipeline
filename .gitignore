@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Generated data and heavy geometry assets
+data/
+outputs/
+captures/
+captures_*/
+*_render/
+*_renders/
+*.las
+*.laz
+*.ply
+*.obj
+*.mtl
+*.exr
+*.npy
+*.npz
+!uav_data_processing/dataset/wai/colormaps/*.npz
+
+# Local editor/system files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
