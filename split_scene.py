@@ -79,6 +79,7 @@ def uavff3d_real_split(scenes):
     for scene in scenes:
         if scene.startswith(("nanfang_", "yanghaitang_", "xiaoxiang_")):
             test_scenes.append(scene)
+            val_scenes.append(scene)
         else:
             train_scenes.append(scene)
     return train_scenes, val_scenes, test_scenes
@@ -87,47 +88,14 @@ def uavff3d_real_split(scenes):
 def uavff3d_syn_small_split(scenes):
     train_scenes, val_scenes, test_scenes = [], [], []
     for scene in scenes:
-        if scene in [
-            "6e0f58f270bed732a07da1cf",
-            "839cb6c4e2851f3b19c2891f",
-            "d42f1e211aa8cf183be9eef7",
-            "f56d7176a1c761f71a42d516",
-            "c84e83b8178671214f34d58b",
-            "f8c5c98c2f10e0464c31237d",
-            "9ed987966c06808b50f9fddc",
-            "e1adfae6db9a169eb87b95e0",
-            "d1855fdc4a13f12036083977",
-            "f5dc9a7ff18593f0b14ca976",
-        ]:
-            val_scenes.append(scene)
-        else:
-            train_scenes.append(scene)
+        train_scenes.append(scene)
     return train_scenes, val_scenes, test_scenes
 
 
 def uavff3d_syn_large_split(scenes):
     train_scenes, val_scenes, test_scenes = [], [], []
     for scene in scenes:
-        if scene in [
-            "c9de4e1d6398f4bcb91b48b6",
-            "bd59fb1914435b924610f4b0",
-            "3c1025e19b39150b8a60e3bc",
-            "b6f99e6fe4230eaa259e0677",
-            "955990398bd51dfc072646ad",
-            "d9265e40c0bb09751e61752f",
-            "234979e8a4ac741f48a90e74",
-            "c8d51ef1b2870df76aeb2e29",
-            "75ed9f2c68d73079f12858cb",
-            "a3a2fd139f2751a7b483ac9c",
-            "2fdab7f7992376f2ebc39c16",
-            "15f5de41f150c58119d90550",
-            "618eb1d7ac301fe79dbd048c",
-            "3ad09ff6c7a7568f0563dce4",
-            "f3147503e16c03e3c59caf8d",
-        ]:
-            val_scenes.append(scene)
-        else:
-            train_scenes.append(scene)
+        train_scenes.append(scene)
     return train_scenes, val_scenes, test_scenes
 
 def uavff3d_fa_split(scenes):
@@ -313,13 +281,13 @@ def blendedmvs_split(scenes):
 
 
 def usegeo_split(scenes):
-    return scenes, scenes, scenes
+    return [], scenes, scenes
 
 def urbanscene3d_split(scenes):
-    return scenes, scenes, scenes
+    return [], scenes, scenes
 
 def enrich_split(scenes):
-    return scenes, scenes, scenes
+    return [], scenes, scenes
 
 def save_scene_lists(scene_list, output_path):
     """Save the list of scene names as both numpy array and txt."""

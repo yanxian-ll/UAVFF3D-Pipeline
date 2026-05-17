@@ -36,4 +36,4 @@ depth_assoc_error_thres: 0.2
 depth_assoc_rel_error_thres: 0.02
 depth_assoc_error_temp: 0.0
 
-overwrite: true
+overwrite: false

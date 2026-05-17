@@ -6,37 +6,34 @@ neighbors as a memory-mappable CSR graph. The resulting graph is referenced from
 ``scene_meta.json`` and can be consumed by downstream samplers.
 """
 
-import argparse
-import json
-import math
 import os
+import math
+import json
 import shutil
 from pathlib import Path
-
+from collections import defaultdict
+import yaml
 import numpy as np
 import torch
-import yaml
 from tqdm import tqdm
+import argparse
 
-from dataset.utils.covis_utils import (
-    compute_frustum_intersection,
-    load_scene_data,
-    project_points_to_views,
-    sample_depths_at_reprojections,
-)
 from dataset.wai.core import load_data, store_data
 from dataset.wai.scene_frame import get_scene_names
 
+from dataset.utils.covis_utils import (
+    load_scene_data,
+    compute_frustum_intersection,
+    project_points_to_views,            
+    sample_depths_at_reprojections,    
+)
 
-def cfg_get(cfg, key, default=None):
-    """Read either a dict key or an object attribute."""
+def cfg_get(cfg, k, default=None):
     if hasattr(cfg, "get"):
-        return cfg.get(key, default)
-    return getattr(cfg, key, default)
-
+        return cfg.get(k, default)
+    return getattr(cfg, k, default)
 
 def save_csr_npz(path: Path, indptr, indices, data, shape):
-    """Save a compact CSR graph as one compressed ``.npz`` file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         str(path),
@@ -46,17 +43,18 @@ def save_csr_npz(path: Path, indptr, indices, data, shape):
         shape=np.asarray(shape, dtype=np.int64),
     )
 
-
-def save_csr_mmap_npy(
-    dirpath: Path,
-    indptr,
-    indices,
-    data,
-    shape,
-    indices_dtype=np.int32,
-    data_dtype=np.float32,
-):
-    """Save CSR arrays separately so large graphs can be memory-mapped."""
+def save_csr_mmap_npy(dirpath: Path, indptr, indices, data, shape,
+                      indices_dtype=np.int32, data_dtype=np.float32):
+    """
+    Save CSR graph into multiple .npy files for mmap loading.
+    Layout:
+      dirpath/
+        indptr.npy
+        indices.npy
+        data.npy
+        shape.npy
+        meta.json (optional)
+    """
     dirpath.mkdir(parents=True, exist_ok=True)
 
     indptr = np.asarray(indptr, dtype=np.int64)
@@ -81,49 +79,41 @@ def save_csr_mmap_npy(
         json.dump(meta, f, indent=2)
 
 
-def _attach_existing_graph(scene_root: Path, scene_meta: dict, cfg, out_dir: Path) -> bool:
-    """Update metadata when a compatible graph already exists."""
-    view_graph_dir = out_dir / "view_covis_graph_csr_mmap"
-    if (view_graph_dir / "indptr.npy").exists():
-        scene_meta["scene_modalities"]["covis_graph_view_csr"] = {
-            "scene_key": f"{cfg.out_path}/view_covis_graph_csr_mmap",
-            "format": "csr_mmap_npy",
-        }
-        store_data(scene_root / "scene_meta.json", scene_meta, "scene_meta")
-        return True
-
-    # Legacy MapAnything-style pairwise graph.
-    legacy_dir = out_dir / "v0"
-    if legacy_dir.exists():
-        pairwise_npy = os.listdir(legacy_dir)[0]
-        scene_meta["scene_modalities"]["pairwise_covisibility"] = {
-            "scene_key": f"{cfg.out_path}/v0/{pairwise_npy}",
-            "format": "mmap",
-        }
-        store_data(scene_root / "scene_meta.json", scene_meta, "scene_meta")
-        return True
-
-    return False
-
-
 @torch.no_grad()
 def compute_covisibility(cfg, scene_name: str, overwrite=False):
-    """Compute and store one scene's view-covisibility CSR graph."""
     scene_root = Path(cfg.root) / scene_name
     scene_meta = load_data(scene_root / "scene_meta.json", "scene_meta")
 
     out_dir = scene_root / cfg.out_path
     view_graph_dir = out_dir / "view_covis_graph_csr_mmap"
-
-    if not overwrite and _attach_existing_graph(scene_root, scene_meta, cfg, out_dir):
-        print(f"[{scene_name}] covisibility graph already exists, skipping.")
-        return
-
-    if out_dir.exists() and overwrite:
-        shutil.rmtree(out_dir)
     view_graph_dir.mkdir(parents=True, exist_ok=True)
 
+    if (view_graph_dir / "indptr.npy").exists() and not overwrite:
+        scene_meta["scene_modalities"]["covis_graph_view_csr"] = {
+            "scene_key": f"{cfg.out_path}/view_covis_graph_csr_mmap",  # 指向目录
+            "format": "csr_mmap_npy",
+        }
+        store_data(scene_root / "scene_meta.json", scene_meta, "scene_meta")
+        print(f"[{scene_name}] covisibility graph already exists, skipping.")
+        return
+    # mapanything format
+    elif (out_dir / "v0").exists() and not overwrite:
+        pairwise_npy = os.listdir(out_dir / "v0")[0]
+        scene_meta["scene_modalities"]["pairwise_covisibility"] = {
+            "scene_key": f"{cfg.out_path}/v0/{pairwise_npy}",
+            "format": "mmap",
+        }
+        store_data(scene_root / "scene_meta.json", scene_meta, "scene_meta")
+        print(f"[{scene_name}] covisibility graph already exists, skipping.")
+        return
+    
+    if out_dir.exists() and overwrite:
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Load data (depths/intrinsics/cam2worlds/valid masks/points)
     scene_data = load_scene_data(cfg, scene_name, device)
 
     depths = scene_data["depths"]
@@ -131,19 +121,22 @@ def compute_covisibility(cfg, scene_name: str, overwrite=False):
     valid_depth_masks = scene_data["valid_depth_masks"]
     intrinsics = scene_data["intrinsics"]
     cam2worlds = scene_data["cam2worlds"]
-    world_pts3d = scene_data["world_pts3d"]
+    world_pts3d = scene_data["world_pts3d"]   # list[tensor] or [N,...] depending on你的实现
 
     num_frames = depths.shape[0]
     print(f"[{scene_name}] num_views={num_frames}, depth_res=({depth_h},{depth_w})")
 
+    # Candidate filtering: frustum intersection (optional)
     frustum_intersection = compute_frustum_intersection(
         cfg, depths, valid_depth_masks, intrinsics, cam2worlds, device
     )
 
     min_covis = float(cfg_get(cfg, "min_covis", 0.1))
     topk = int(cfg_get(cfg, "topk", 50))
+    exclude_same_frame = bool(cfg_get(cfg, "exclude_same_frame", True))
     ov_chunk_size = int(cfg_get(cfg, "ov_chunk_size", 512))
 
+    # 输出 CSR：每行 i 只保留 topk 且 >= min_covis 的邻居
     indptr = [0]
     indices = []
     data = []
@@ -156,106 +149,104 @@ def compute_covisibility(cfg, scene_name: str, overwrite=False):
         else:
             ov_inds = torch.arange(num_frames, device=device)
 
-        # Same-frame overlap is not useful for pair sampling.
+        if ov_inds.numel() == 0:
+            indptr.append(indptr[-1])
+            continue
+
+        # always drop self
         ov_inds = ov_inds[ov_inds != idx]
         if ov_inds.numel() == 0:
             indptr.append(indptr[-1])
             continue
 
+        # compute overlap in chunks
         overlap_score = torch.zeros((num_frames,), device="cpu")
-        for start in range(0, ov_inds.numel(), ov_chunk_size):
-            end = min(start + ov_chunk_size, ov_inds.numel())
-            ov_chunk = ov_inds[start:end]
+        for s in range(0, ov_inds.numel(), ov_chunk_size):
+            e = min(s + ov_chunk_size, ov_inds.numel())
+            ov_chunk = ov_inds[s:e]
             if ov_chunk.numel() == 0:
                 continue
 
             reprojected_pts, valid_mask, _ = project_points_to_views(
-                idx,
-                ov_chunk,
-                depth_h,
-                depth_w,
-                valid_depth_masks,
-                cam2worlds,
-                world_pts3d,
-                intrinsics,
-                device,
+                idx, ov_chunk, depth_h, depth_w,
+                valid_depth_masks, cam2worlds, world_pts3d, intrinsics, device
             )
 
-            if not valid_mask.any():
-                continue
+            if valid_mask.any():
+                depth_lu, expected_depth = sample_depths_at_reprojections(
+                    reprojected_pts, depths, ov_chunk, depth_h, depth_w, device
+                )
+                reprojection_error = torch.abs(expected_depth - depth_lu)
 
-            depth_lu, expected_depth = sample_depths_at_reprojections(
-                reprojected_pts, depths, ov_chunk, depth_h, depth_w, device
-            )
-            reprojection_error = torch.abs(expected_depth - depth_lu)
+                # 深度关联阈值
+                depth_assoc_error_thres = float(cfg_get(cfg, "depth_assoc_error_thres", 0.02))
+                depth_assoc_rel_error_thres = float(cfg_get(cfg, "depth_assoc_rel_error_thres", 0.01))
+                depth_assoc_error_temp = float(cfg_get(cfg, "depth_assoc_error_temp", 0.0))
 
-            depth_assoc_error_thres = float(cfg_get(cfg, "depth_assoc_error_thres", 0.02))
-            depth_assoc_rel_error_thres = float(cfg_get(cfg, "depth_assoc_rel_error_thres", 0.01))
-            depth_assoc_error_temp = float(cfg_get(cfg, "depth_assoc_error_temp", 0.0))
-            depth_assoc_thres = (
-                depth_assoc_error_thres
-                + depth_assoc_rel_error_thres * expected_depth
-                - math.log(0.5) * depth_assoc_error_temp
-            )
-            valid_depth_projection = (reprojection_error < depth_assoc_thres) & valid_mask
+                depth_assoc_thres = (
+                    depth_assoc_error_thres
+                    + depth_assoc_rel_error_thres * expected_depth
+                    - math.log(0.5) * depth_assoc_error_temp
+                )
+                valid_depth_projection = (reprojection_error < depth_assoc_thres) & valid_mask
 
-            denom_mode = cfg_get(cfg, "denominator_mode", "valid_target_depth")
-            if denom_mode == "valid_target_depth":
-                score = valid_depth_projection.sum([1, 2]) / valid_depth_masks[ov_chunk].sum([1, 2]).clamp(1)
-                score = score.clamp(0, 1)
-            elif denom_mode == "full":
-                score = valid_depth_projection.sum([1, 2]) / float(depth_h * depth_w)
-            else:
-                raise NotImplementedError(f"denominator_mode={denom_mode}")
+                denom_mode = cfg_get(cfg, "denominator_mode", "valid_target_depth")
+                if denom_mode == "valid_target_depth":
+                    score = valid_depth_projection.sum([1, 2]) / valid_depth_masks[ov_chunk].sum([1, 2]).clamp(1)
+                    score = score.clamp(0, 1)
+                elif denom_mode == "full":
+                    score = valid_depth_projection.sum([1, 2]) / float(depth_h * depth_w)
+                else:
+                    raise NotImplementedError(f"denominator_mode={denom_mode}")
 
-            overlap_score[ov_chunk.cpu()] = score.cpu()
+                overlap_score[ov_chunk.cpu()] = score.cpu()
 
         row = overlap_score.numpy()
-        candidates = np.where(row >= min_covis)[0]
-        if candidates.size == 0:
+        # keep >= min_covis
+        cand = np.where(row >= min_covis)[0]
+        if cand.size == 0:
             indptr.append(indptr[-1])
             continue
 
-        if candidates.size > topk:
-            topk_part = np.argpartition(row[candidates], -topk)[-topk:]
-            candidates = candidates[topk_part]
-        candidates = candidates[np.argsort(-row[candidates])]
+        # topk by score
+        if cand.size > topk:
+            part = np.argpartition(row[cand], -topk)[-topk:]
+            cand = cand[part]
+        # sort by score desc (optional)
+        cand = cand[np.argsort(-row[cand])]
 
-        indices.extend(candidates.tolist())
-        data.extend(row[candidates].astype(np.float32).tolist())
+        indices.extend(cand.tolist())
+        data.extend(row[cand].astype(np.float32).tolist())
         indptr.append(len(indices))
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
+    # save VIEW CSR
     save_csr_mmap_npy(
         view_graph_dir,
-        indptr,
-        indices,
-        data,
+        indptr, indices, data,
         shape=(num_frames, num_frames),
         indices_dtype=np.int32,
         data_dtype=np.float16,
     )
 
     scene_meta["scene_modalities"]["covis_graph_view_csr"] = {
-        "scene_key": f"{cfg.out_path}/view_covis_graph_csr_mmap",
+        "scene_key": f"{cfg.out_path}/view_covis_graph_csr_mmap",  # 指向目录
         "format": "csr_mmap_npy",
     }
+
     store_data(scene_root / "scene_meta.json", scene_meta, "scene_meta")
     print(f"[{scene_name}] done. graphs saved to {out_dir}")
 
 
 class AttrDict(dict):
-    """Dictionary with attribute access."""
-
-    def __getattr__(self, key):
+    """dict + attribute access + get()"""
+    def __getattr__(self, k):
         try:
-            return self[key]
-        except KeyError as exc:
-            raise AttributeError(key) from exc
-
-    def __setattr__(self, key, value):
-        self[key] = value
+            return self[k]
+        except KeyError as e:
+            raise AttributeError(k) from e
+    def __setattr__(self, k, v):
+        self[k] = v
 
 
 def _load_yaml_cfg(path: str) -> dict:
@@ -266,7 +257,6 @@ def _load_yaml_cfg(path: str) -> dict:
             raise ValueError(f"YAML config must be a dict, got {type(cfg)}")
         return cfg
     return {}
-
 
 def parse_args():
     default_config_path = "configs/covisibility_config.yaml"
