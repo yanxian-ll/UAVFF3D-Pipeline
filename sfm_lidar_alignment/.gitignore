@@ -1,8 +1,0 @@
-.vscode/
-lidar/
-recon/
-scene_fused_render/
-undistort/
-vis/
-
-*.pdf

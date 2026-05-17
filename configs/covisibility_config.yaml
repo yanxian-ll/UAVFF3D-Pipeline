@@ -1,0 +1,39 @@
+# Base paths
+root: "./data"
+out_path: "covisibility"
+
+scene_filters:
+  - exists: scene_meta.json
+  - process_state_not: [covisibility, finished]
+
+# Modalities loaded for each frame. The key remap lets the dataset loader expose
+# rendered_depth as the standard depth field used by the covisibility code.
+frame_modalities:
+  - depth|rendered_depth
+
+key_remap:
+  rendered_depth: depth
+
+batch_size: 32
+num_workers: 8
+
+# Optional: scale depth images down by this factor.
+# downscale_factor: 4
+target_size: 224
+
+# View graph selection
+min_covis: 0.1
+topk: 50
+
+perform_frustum_check: true
+ov_chunk_size: 512
+
+# Score denominator: valid_target_depth or full.
+denominator_mode: "full"
+
+# Depth consistency thresholds for accepted reprojections.
+depth_assoc_error_thres: 0.2
+depth_assoc_rel_error_thres: 0.02
+depth_assoc_error_temp: 0.0
+
+overwrite: true

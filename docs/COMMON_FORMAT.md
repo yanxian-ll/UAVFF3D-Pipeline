@@ -1,53 +1,71 @@
-# Common A3D Scene Format
+# UAVFF3D/WAI common scene format
 
-This format is the bridge between synthetic rendering, LiDAR-grounded real
-scenes, external dataset conversion, training samplers, and evaluation scripts.
+This document describes the minimal processed scene format consumed by the UAVFF3D pipeline.
 
-## Required Files
+## Directory layout
 
 ```text
 <dataset>/<scene>/
-  images/<frame>.png|jpg|jpeg
-  cams/<frame>.txt
-  depth/<frame>.exr
-  scene_meta.json
+  images/
+    <frame>.png|jpg|jpeg
+  cams/
+    <frame>.txt
+  depth/
+    <frame>.exr
+  mask/
+    <frame>.png              # optional binary valid mask
+  scene_meta.json            # generated
 ```
 
-Frame stems must match across modalities. For example, `00000012.png`,
-`00000012.txt`, and `00000012.exr` describe the same view.
+File stems must match across `images/`, `cams/`, and `depth/`. Optional modalities such as `mask/` are added to `scene_meta.json` only when present.
 
-## Camera Text
+## Camera text format
+
+`generate_scene_meta.py` expects camera files with the same structure used by BlendedMVS-style text cameras:
 
 ```text
-extrinsic opencv(x Right, y Down, z Forward) world2camera
-4x4 matrix
+extrinsic
+<4 numbers>
+<4 numbers>
+<4 numbers>
+<4 numbers>
 
-intrinsic: fx fy cx cy (pixel)
-3x3 matrix
+intrinsic
+<3 numbers>
+<3 numbers>
+<3 numbers>
 
-h w fov
-height width horizontal_or_vertical_fov
+h w hfov
+<height> <width> <horizontal_fov_degrees>
 ```
 
-Most converters write horizontal FOV. Some legacy renderers wrote vertical FOV;
-downstream geometry uses the full intrinsic matrix, so the matrix values are the
-authoritative source.
+The extrinsic matrix is interpreted as world-to-camera. The metadata generator stores the inverse as `transform_matrix` in camera-to-world OpenCV convention.
 
-## Scene Metadata
+## Generated metadata
 
-`scene_meta.json` stores:
+`scene_meta.json` contains:
 
-- `scene_name`, `dataset_name`, and `version`
-- `camera_convention: opencv`
-- one frame record per stem
-- `transform_matrix` as camera-to-world
-- per-frame intrinsics and image size
-- modality declarations in `frame_modalities`
+- `scene_name`
+- `dataset_name`
+- `camera_model`
+- `camera_convention`
+- per-frame image/depth paths
+- intrinsics (`fl_x`, `fl_y`, `cx`, `cy`)
+- image size (`h`, `w`)
+- camera-to-world transform matrix
+- optional mask paths when available
 
-Generate or refresh it with:
+## Split metadata
 
-```bash
-cd uav_data_processing
-python generate_scene_meta.py --root_dir ../data --dataset A3D-Real A3D-Syn-L A3D-Syn-S --overwrite
+`split_scene.py` writes both NumPy and text scene lists:
+
+```text
+<metadata>/<split>/<dataset>_scene_list_<split>.npy
+<metadata>/<split>/<dataset>_scene_list_<split>.txt
 ```
 
+It also writes hFOV summaries:
+
+```text
+<metadata>/<split>/<dataset>_scene_hfov_<split>.json
+```

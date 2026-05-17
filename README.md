@@ -1,124 +1,153 @@
-# A3D-Bench Pipeline
+# UAVFF3D Pipeline
 
-This repository contains the data-construction code used for the A3D-Bench
-paper pipeline. It covers synthetic data rendering, LiDAR--SfM alignment,
-conversion of heterogeneous UAV/MVS datasets into a shared format, scene
-metadata generation, covisibility graph construction, and split preparation.
+Open-source data processing utilities for **UAVFF3D: A Geometry-Aware Benchmark for Feed-Forward UAV 3D Reconstruction**.
 
-## Repository Layout
+The project converts UAVFF3D and external UAV/MVS datasets into a shared UAVFF3D/WAI scene format for training, prior-aware inference, covisibility sampling, and evaluation.
 
-```text
-a3dbench_pipeline/
-  synthetic_generation/        # A3D-Syn-L, A3D-Syn-S, and A3D-FA renderers
-  sfm_lidar_alignment/         # LiDAR/SfM registration, depth rendering, fusion, metrics
-  uav_data_processing/         # Unified-format conversion, metadata, covisibility, splits
-  docs/                        # Format and workflow notes
-```
+## Dataset naming
 
-The three original root-level renderer names are kept as compatibility wrappers:
+The codebase now uses the UAVFF3D naming used in the paper:
 
-- `multi_obj_tile_renderer_en_standardized.py`
-- `view_selector_renderer_standardized.py`
-- `view_selector_renderer_en_standardized.py`
+| Name | Purpose |
+| --- | --- |
+| `UAVFF3D-Real` | Real UAV scenes and LiDAR-supported real-world evaluation data. |
+| `UAVFF3D-Syn-L` | Large synthetic UAV scenes; part of `UAVFF3D-Syn`. |
+| `UAVFF3D-Syn-S` | Smaller/local synthetic UAV scenes; part of `UAVFF3D-Syn`. |
+| `UAVFF3D-FA` | Controlled hFOV-height ambiguity diagnostic split. |
 
-New work should use the clearer paths under `synthetic_generation/`.
+`UAVFF3D-Syn-L` and `UAVFF3D-Syn-S` are implementation-level subfolders of the paper's `UAVFF3D-Syn` component.
 
-## Pipeline Overview
-
-1. **Synthetic generation**
-   - `synthetic_generation/a3d_syn_l_tile_renderer.py` renders large structured
-     tiled synthetic scenes for A3D-Syn-L.
-   - `synthetic_generation/a3d_syn_s_view_selector_renderer.py` supports
-     interactive viewpoint/trajectory selection for smaller or irregular
-     synthetic scene units used by A3D-Syn-S.
-   - `synthetic_generation/a3d_fa_view_selector_renderer.py` renders controlled
-     hFOV--height groups for A3D-FA.
-2. **LiDAR-grounded real scenes**
-   - `sfm_lidar_alignment/` prepares LAS/LAZ/PLY and SfM point clouds, applies
-     coarse transforms, renders LiDAR/SfM depths, refines alignment, evaluates
-     alignment quality, and fuses depth.
-3. **Unified data format**
-   - `uav_data_processing/scripts/convert/` converts external datasets and
-     reconstructed scenes into the common `images/`, `cams/`, `depth/` layout.
-   - `uav_data_processing/generate_scene_meta.py` writes `scene_meta.json`.
-   - `uav_data_processing/covisibility.py` builds sparse covisibility graphs.
-   - `uav_data_processing/split_scene.py` writes train/val/test split files and
-     optional hFOV summaries.
-
-## Common Scene Format
-
-Each processed scene should follow this minimal layout:
+## Repository layout
 
 ```text
-scene/
-  images/<frame>.png|jpg
-  cams/<frame>.txt
-  depth/<frame>.exr
-  scene_meta.json
+.
+├── configs/                         # Example YAML configs
+├── dataset/                         # Dataset loaders and WAI utilities
+│   ├── base/                        # Generic multi-view dataset base classes
+│   ├── utils/                       # Geometry, metrics, image, and sampling helpers
+│   ├── vis/                         # Dataset-specific loaders
+│   └── wai/                         # Common WAI scene I/O
+├── docs/                            # Format and migration notes
+├── scripts/
+│   ├── convert/                     # Raw-dataset converters/reorganizers
+│   ├── download/                    # Public dataset download helpers
+│   └── synthetic_generation/        # UAVFF3D synthetic renderers
+├── covisibility.py                  # Build depth-reprojection covisibility graphs
+├── generate_scene_meta.py           # Generate scene_meta.json for processed scenes
+└── split_scene.py                   # Build train/val/test split files and hFOV summaries
 ```
-
-Optional modalities can be added with matching frame stems:
-
-```text
-mask/
-depth_da3/
-depth_complete/
-semantic_mask/
-covisibility/view_covis_graph_csr_mmap/
-```
-
-Camera files use OpenCV coordinates: x right, y down, z forward. The extrinsic
-matrix is world-to-camera; `scene_meta.json` stores the inverse camera-to-world
-matrix.
 
 ## Installation
 
-Create an environment with Python 3.10 or newer. The core scripts use:
-
 ```bash
+git clone https://github.com/yanxian-ll/UAVFF3D-Pipeline
+cd UAVFF3D-Pipeline
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 pip install -r requirements.txt
+pip install -e .
 ```
 
-Some optional scripts require extra local packages or checkpoints, for example
-SAM3 for exclusion masks, `uniception` for specific downstream loaders, and a
-GUI/off-screen rendering setup for Open3D visualization.
+For GPU-accelerated rendering or PyTorch workflows, install a PyTorch build that matches your CUDA version before running the relevant scripts.
 
-## Typical Commands
+## Common scene format
 
-Generate `scene_meta.json` for processed scenes:
+A processed scene should contain at least:
+
+```text
+scene_name/
+  images/<frame>.png|jpg|jpeg
+  cams/<frame>.txt
+  depth/<frame>.exr
+  mask/<frame>.png                 # optional
+  scene_meta.json                  # generated by generate_scene_meta.py
+```
+
+See [`docs/COMMON_FORMAT.md`](docs/COMMON_FORMAT.md) for camera-file and metadata details.
+
+## Minimal workflow
+
+Assume your processed data are stored as:
+
+```text
+../data/
+  UAVFF3D-Real/<scene>/...
+  UAVFF3D-Syn-L/<scene>/...
+  UAVFF3D-Syn-S/<scene>/...
+  UAVFF3D-FA/<scene>/...
+```
+
+Generate metadata:
 
 ```bash
-cd uav_data_processing
-python generate_scene_meta.py --root_dir ../data --dataset A3D-Real A3D-Syn-L A3D-Syn-S --overwrite
+python generate_scene_meta.py \
+  --root_dir ../data \
+  --dataset UAVFF3D-Real UAVFF3D-Syn-L UAVFF3D-Syn-S UAVFF3D-FA \
+  --overwrite
 ```
 
 Build covisibility graphs:
 
 ```bash
-cd uav_data_processing
-python covisibility.py --config configs/covisibility_config.yaml --root ../data/A3D-Syn-L
+python covisibility.py \
+  --config configs/covisibility_config.yaml \
+  --root ../data/UAVFF3D-Syn-L
 ```
 
-Apply a LiDAR transform chain:
+Create split files and hFOV summaries:
 
 ```bash
-cd sfm_lidar_alignment
-python lidar_transform.py --lidar scene/cloud_merged.las --transform scene/transform --out_lidar_name lidar_final.ply
+python split_scene.py \
+  --root ../data \
+  --metadata ../metadata \
+  --dataset UAVFF3D-Real UAVFF3D-Syn-L UAVFF3D-Syn-S UAVFF3D-FA
 ```
 
-Render a controlled A3D-FA hFOV group:
+The generated split files follow this pattern:
 
-```bash
-python synthetic_generation/a3d_fa_view_selector_renderer.py --mesh path/to/mesh.obj --out-dir outputs/a3d_fa_scene
+```text
+../metadata/train/UAVFF3D-Real_scene_list_train.npy
+../metadata/train/UAVFF3D-Real_scene_hfov_train.json
 ```
 
-## Notes
+## Dataset loaders
 
-- Large scenes should be rendered and converted scene-by-scene; generated data
-  are intentionally not stored in this code repository.
-- `__pycache__`, rendered outputs, point clouds, and raw datasets are ignored by
-  `.gitignore`.
-- Existing dataset assets, LiDAR data, textured meshes, and third-party model
-  checkpoints keep their original licenses. The MIT license in this repository
-  applies only to the code written here.
+The UAVFF3D loaders live in `dataset/vis/`:
 
+- `uavff3d_real.py` -> `UAVFF3DRealWAI`
+- `uavff3d_syn_large.py` -> `UAVFF3DSynLargeWAI`
+- `uavff3d_syn_small.py` -> `UAVFF3DSynSmallWAI`
+- `uavff3d_scenes.py` -> `UAVFF3DScenesWAI`
+
+Example:
+
+```python
+from dataset.vis import UAVFF3DRealWAI
+
+dataset = UAVFF3DRealWAI(
+    ROOT="../data/UAVFF3D-Real",
+    dataset_metadata_dir="../metadata",
+    split="train",
+    num_views=8,
+    resolution=(518, 392),
+    aug_crop=16,
+    transform="colorjitter+grayscale+gaublur",
+    data_norm_type="dinov2",
+)
+```
+
+## Synthetic generation
+
+Synthetic renderers were renamed to match UAVFF3D:
+
+- `scripts/synthetic_generation/uavff3d_syn_large_tile_renderer.py`
+- `scripts/synthetic_generation/uavff3d_syn_small_view_selector_renderer.py`
+- `scripts/synthetic_generation/uavff3d_fa_view_selector_renderer.py`
+
+Run each script with `--help` before use because rendering options depend on the input 3D model layout.
+
+
+## License
+
+This project is released under the MIT License. See [`LICENSE`](LICENSE).
